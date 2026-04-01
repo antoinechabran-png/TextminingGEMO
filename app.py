@@ -20,6 +20,7 @@ lemmatizer = setup_nltk()
 
 def simple_clean(text):
     if not text or pd.isna(text): return []
+    # Keeps words with at least 3 characters to handle short sensory terms (sea, sun, joy)
     words = re.findall(r'\b[a-zà-ÿ]{3,}\b', str(text).lower())
     return [lemmatizer.lemmatize(w) for w in words]
 
@@ -32,7 +33,7 @@ with st.sidebar:
     
     # Sensitivity Logic: 1.0 = Strict (Baseline), < 1.0 = Extrapolation
     match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 1.0, 
-                                  help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using Column D examples.")
+                                  help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using the synonyms in Column D.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
 
 tab1, tab2, tab3 = st.tabs(["📊 Emotional Load", "🌈 Fragrance Profiles", "📈 Competitive View"])
@@ -48,16 +49,16 @@ if data_file and dict_file:
     else:
         dict_df = pd.read_excel(dict_file)
     
-    # --- REFINED: Balanced Knowledge Base ---
+    # --- REFINED: Balanced Knowledge Base (Updated for Synonyms) ---
     emo_map = {}        # Strict Map (Col C)
-    context_map = {}    # Context Map (Col D)
+    context_map = {}    # Context Map (Col D synonyms)
     knowledge_pool = [] # For fuzzy matching
 
     for _, row in dict_df.iterrows():
         cat = str(row.iloc[0]).strip() 
         sub = str(row.iloc[1]).strip() 
         primary_word = str(row.iloc[2]).strip().lower()
-        examples = str(row.iloc[3]).lower() if len(row) > 3 else ""
+        synonyms = str(row.iloc[3]).lower() if len(row) > 3 else ""
 
         if cat != "OUT" and primary_word != "nan" and primary_word != "":
             entry = {"cat": cat, "sub": sub}
@@ -66,9 +67,10 @@ if data_file and dict_file:
             emo_map[primary_word] = entry
             knowledge_pool.append(primary_word)
             
-            # 2. Extract keywords from Column D for the secondary pool
-            example_keywords = re.findall(r'\b[a-zà-ÿ]{4,}\b', examples)
-            for kw in example_keywords:
+            # 2. Extract Synonyms from Column D
+            # Updated to {3,} to catch short synonyms like 'Joy', 'Sea', 'Sun'
+            synonym_keywords = re.findall(r'\b[a-zà-ÿ]{3,}\b', synonyms)
+            for kw in synonym_keywords:
                 if kw not in emo_map:
                     context_map[kw] = entry
                     knowledge_pool.append(kw)
@@ -86,16 +88,16 @@ if data_file and dict_file:
             matches = []
             
             for t in tokens:
-                # STEP 1: Strict Check (Column C) - This preserves your baseline results
+                # STEP 1: Strict Check (Column C) - Matches your baseline exactly
                 if t in emo_map:
                     matches.append(emo_map[t])
                 
-                # STEP 2: Extrapolation Check (Column D + Fuzzy Logic)
-                # Only runs if user sets sensitivity below 1.0
+                # STEP 2: Extrapolation Check (Column D Synonyms + Fuzzy Logic)
+                # This kicks in if an exact match isn't found AND sensitivity is < 1.0
                 elif match_sensitivity < 1.0:
                     fuzzy_match = get_close_matches(t, knowledge_pool, n=1, cutoff=match_sensitivity)
                     if fuzzy_match:
-                        # Try to find the associated category in either map
+                        # Find the category from either the primary or synonym map
                         res = emo_map.get(fuzzy_match[0]) or context_map.get(fuzzy_match[0])
                         if res:
                             matches.append(res)
