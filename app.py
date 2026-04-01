@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+import pd as pd
 import nltk
 from nltk.stem import WordNetLemmatizer
 import matplotlib.pyplot as plt
@@ -30,7 +30,8 @@ with st.sidebar:
     dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
     st.divider()
     
-    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 1.0, 
+    # UPDATED: Default value set to 0.92
+    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.92, 
                                   help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using the synonyms in Column D.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
 
@@ -143,16 +144,8 @@ if data_file and dict_file:
                 comp_df = pd.DataFrame(all_emo_list)
                 pivot_df = pd.crosstab(comp_df['pid'], comp_df['cat'], normalize='index') * 100
                 
-                # Plotting Competitive View with labels
-                fig_comp, ax_comp = plt.subplots(figsize=(12, 7))
-                pivot_df.plot(kind='bar', stacked=False, ax=ax_comp, color=['#FFADAD', '#A0C4FF', '#CAFFBF'])
+                # REVERTED: Using the previous st.bar_chart for a cleaner look
+                st.bar_chart(pivot_df)
                 
-                for container in ax_comp.containers:
-                    ax_comp.bar_label(container, fmt='%.1f%%', padding=3, fontsize=9)
-                
-                ax_comp.set_ylabel("Percentage (%)")
-                ax_comp.set_xlabel("Product ID")
-                plt.xticks(rotation=45)
-                st.pyplot(fig_comp)
-                
+                # Keeping the score table below for precision
                 st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Purples"))
