@@ -20,7 +20,6 @@ lemmatizer = setup_nltk()
 
 def simple_clean(text):
     if not text or pd.isna(text): return []
-    # Keeps words with at least 3 characters to handle short sensory terms (sea, sun, joy)
     words = re.findall(r'\b[a-zà-ÿ]{3,}\b', str(text).lower())
     return [lemmatizer.lemmatize(w) for w in words]
 
@@ -31,7 +30,6 @@ with st.sidebar:
     dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
     st.divider()
     
-    # Sensitivity Logic: 1.0 = Strict (Baseline), < 1.0 = Extrapolation
     match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 1.0, 
                                   help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using the synonyms in Column D.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
@@ -43,16 +41,14 @@ if data_file and dict_file:
     p_col = st.selectbox("Product ID Column", df_raw.columns)
     v_col = st.selectbox("Verbatim Column", df_raw.columns)
 
-    # Load Dictionary
     if dict_file.name.endswith('.csv'):
         dict_df = pd.read_csv(dict_file)
     else:
         dict_df = pd.read_excel(dict_file)
     
-    # --- REFINED: Balanced Knowledge Base (Updated for Synonyms) ---
-    emo_map = {}        # Strict Map (Col C)
-    context_map = {}    # Context Map (Col D synonyms)
-    knowledge_pool = [] # For fuzzy matching
+    emo_map = {}
+    context_map = {}
+    knowledge_pool = []
 
     for _, row in dict_df.iterrows():
         cat = str(row.iloc[0]).strip() 
@@ -62,13 +58,9 @@ if data_file and dict_file:
 
         if cat != "OUT" and primary_word != "nan" and primary_word != "":
             entry = {"cat": cat, "sub": sub}
-            
-            # 1. Primary Keyword (Column C)
             emo_map[primary_word] = entry
             knowledge_pool.append(primary_word)
             
-            # 2. Extract Synonyms from Column D
-            # Updated to {3,} to catch short synonyms like 'Joy', 'Sea', 'Sun'
             synonym_keywords = re.findall(r'\b[a-zà-ÿ]{3,}\b', synonyms)
             for kw in synonym_keywords:
                 if kw not in emo_map:
@@ -82,40 +74,33 @@ if data_file and dict_file:
         df = df.dropna(subset=[p_col, v_col])
         df[p_col] = df[p_col].astype(str).str.strip()
         
-        # --- REFINED: Extrapolated Matching Function ---
         def get_emotions(text):
             tokens = simple_clean(text)
             matches = []
-            
             for t in tokens:
-                # STEP 1: Strict Check (Column C) - Matches your baseline exactly
                 if t in emo_map:
                     matches.append(emo_map[t])
-                
-                # STEP 2: Extrapolation Check (Column D Synonyms + Fuzzy Logic)
-                # This kicks in if an exact match isn't found AND sensitivity is < 1.0
                 elif match_sensitivity < 1.0:
                     fuzzy_match = get_close_matches(t, knowledge_pool, n=1, cutoff=match_sensitivity)
                     if fuzzy_match:
-                        # Find the category from either the primary or synonym map
                         res = emo_map.get(fuzzy_match[0]) or context_map.get(fuzzy_match[0])
-                        if res:
-                            matches.append(res)
+                        if res: matches.append(res)
             return matches
 
         df['matches'] = df[v_col].apply(get_emotions)
         df['has_emotion'] = df['matches'].apply(lambda x: 1 if len(x) > 0 else 0)
         st.session_state['processed_emo'] = df
 
-    # --- UI RENDER (Tabs) ---
     if 'processed_emo' in st.session_state:
         df = st.session_state['processed_emo']
         
         with tab1:
             st.subheader("⚡ Total Emotional Load")
-            load_data = df.groupby(p_col)['has_emotion'].mean() * 100
+            load_data = (df.groupby(p_col)['has_emotion'].mean() * 100).sort_values()
             fig, ax = plt.subplots(figsize=(10, 6))
-            load_data.sort_values().plot(kind='barh', color='#A2D2FF', ax=ax)
+            bars = ax.barh(load_data.index, load_data.values, color='#A2D2FF')
+            ax.bar_label(bars, fmt='%.1f%%', padding=5)
+            ax.set_xlabel("% of Verbatims with Emotional Content")
             st.pyplot(fig)
             st.dataframe(load_data.rename("Emotional Load %").sort_values(ascending=False))
 
@@ -128,16 +113,25 @@ if data_file and dict_file:
             if all_matches:
                 m_df = pd.DataFrame(all_matches)
                 c1, c2 = st.columns(2)
+                
                 with c1:
                     st.write("**Main Category Split**")
-                    st.bar_chart(m_df['cat'].value_counts(normalize=True) * 100)
+                    cat_counts = m_df['cat'].value_counts(normalize=True) * 100
+                    fig_cat, ax_cat = plt.subplots(figsize=(6, 6))
+                    bars_cat = ax_cat.bar(cat_counts.index, cat_counts.values, color=['#FFADAD', '#A0C4FF', '#CAFFBF'])
+                    ax_cat.bar_label(bars_cat, fmt='%.1f%%', padding=3)
+                    ax_cat.set_ylabel("Share (%)")
+                    st.pyplot(fig_cat)
+                
                 with c2:
                     st.write("**Sub-Dimension Profile**")
                     color_map = {"Emotion": "#FFADAD", "Image": "#A0C4FF", "Sensation": "#CAFFBF"}
                     sub_counts = m_df.groupby(['cat', 'sub']).size().reset_index(name='count').sort_values('count')
                     fig2, ax2 = plt.subplots(figsize=(8, 8))
                     colors = [color_map.get(c, 'gray') for c in sub_counts['cat']]
-                    ax2.barh(sub_counts['sub'], sub_counts['count'], color=colors)
+                    bars_sub = ax2.barh(sub_counts['sub'], sub_counts['count'], color=colors)
+                    ax2.bar_label(bars_sub, padding=5)
+                    ax2.set_xlabel("Mention Count")
                     st.pyplot(fig2)
             else:
                 st.warning("No emotional matches detected.")
@@ -148,5 +142,17 @@ if data_file and dict_file:
             if all_emo_list:
                 comp_df = pd.DataFrame(all_emo_list)
                 pivot_df = pd.crosstab(comp_df['pid'], comp_df['cat'], normalize='index') * 100
-                st.bar_chart(pivot_df)
+                
+                # Plotting Competitive View with labels
+                fig_comp, ax_comp = plt.subplots(figsize=(12, 7))
+                pivot_df.plot(kind='bar', stacked=False, ax=ax_comp, color=['#FFADAD', '#A0C4FF', '#CAFFBF'])
+                
+                for container in ax_comp.containers:
+                    ax_comp.bar_label(container, fmt='%.1f%%', padding=3, fontsize=9)
+                
+                ax_comp.set_ylabel("Percentage (%)")
+                ax_comp.set_xlabel("Product ID")
+                plt.xticks(rotation=45)
+                st.pyplot(fig_comp)
+                
                 st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Purples"))
