@@ -5,9 +5,10 @@ from nltk.stem import WordNetLemmatizer
 import matplotlib.pyplot as plt
 import re
 import numpy as np
+from difflib import get_close_matches
 
 # Page Config
-st.set_page_config(page_title="Fragrance Emotional Lab", layout="wide", page_icon="🧪")
+st.set_page_config(page_title="Fragrance Emotional Lab Pro", layout="wide", page_icon="🧪")
 
 @st.cache_resource
 def setup_nltk():
@@ -19,15 +20,20 @@ lemmatizer = setup_nltk()
 
 def simple_clean(text):
     if not text or pd.isna(text): return []
+    # Keep standard characters, handles accents for FR/ES/DE
     words = re.findall(r'\b[a-zà-ÿ]{3,}\b', str(text).lower())
     return [lemmatizer.lemmatize(w) for w in words]
 
 # --- UI Setup ---
 with st.sidebar:
-    st.header("⚙️ Data Upload")
+    st.header("⚙️ Analysis Settings")
     data_file = st.file_uploader("1. Upload Verbatim Excel", type=["xlsx"])
     dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
     st.divider()
+    # New: Sensitivity Slider for Extrapolation
+    # Higher = stricter (needs exact words), Lower = more creative extrapolation
+    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.85, 
+                                  help="Lower values allow more 'fuzzy' matching of ideas.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
 
 tab1, tab2, tab3 = st.tabs(["📊 Emotional Load", "🌈 Fragrance Profiles", "📈 Competitive View"])
@@ -43,46 +49,74 @@ if data_file and dict_file:
     else:
         dict_df = pd.read_excel(dict_file)
     
-    # Build word-to-emotion map
+    # --- ENHANCED: Knowledge Base Building ---
+    # We map NOT just the 'mot' (Col C) but also keywords found in 'Examples' (Col D)
     emo_map = {}
+    knowledge_pool = [] 
+
     for _, row in dict_df.iterrows():
         cat = str(row.iloc[0]).strip() 
         sub = str(row.iloc[1]).strip() 
-        word = str(row.iloc[2]).strip().lower() 
-        if cat != "OUT" and word != "nan" and word != "":
-            emo_map[word] = {"cat": cat, "sub": sub}
+        primary_word = str(row.iloc[2]).strip().lower()
+        examples = str(row.iloc[3]).lower() if len(row) > 3 else ""
+
+        if cat != "OUT" and primary_word != "nan" and primary_word != "":
+            entry = {"cat": cat, "sub": sub}
+            
+            # Map the primary trigger
+            emo_map[primary_word] = entry
+            knowledge_pool.append(primary_word)
+            
+            # EXTRAPOLATION STEP: Extract keywords from Column D examples
+            # This allows the AI to "learn" the context you provided
+            example_keywords = re.findall(r'\b[a-zà-ÿ]{4,}\b', examples)
+            for kw in example_keywords:
+                if kw not in emo_map:
+                    emo_map[kw] = entry
+                    knowledge_pool.append(kw)
+
+    knowledge_pool = list(set(knowledge_pool)) # Clean duplicates
 
     if st.sidebar.button("🚀 Analyze Emotional Impact"):
-        # CLEANING STEP: ensure Product IDs are strings and not empty
         df = df_raw.copy()
-        df = df.dropna(subset=[p_col, v_col]) # Remove rows where ID or Verbatim is empty
-        df[p_col] = df[p_col].astype(str).str.strip() # Force ID to clean string
+        df = df.dropna(subset=[p_col, v_col])
+        df[p_col] = df[p_col].astype(str).str.strip()
         
-        def get_emotions(text):
+        # --- ENHANCED: Extrapolated Matching Function ---
+        def get_emotions_extrapolated(text):
             tokens = simple_clean(text)
-            return [emo_map[t] for t in tokens if t in emo_map]
+            matches = []
+            for t in tokens:
+                # 1. Check direct match
+                if t in emo_map:
+                    matches.append(emo_map[t])
+                # 2. Extrapolate: Check if word is very similar to our knowledge pool
+                else:
+                    fuzzy_match = get_close_matches(t, knowledge_pool, n=1, cutoff=match_sensitivity)
+                    if fuzzy_match:
+                        matches.append(emo_map[fuzzy_match[0]])
+            return matches
 
-        df['matches'] = df[v_col].apply(get_emotions)
+        df['matches'] = df[v_col].apply(get_emotions_extrapolated)
         df['has_emotion'] = df['matches'].apply(lambda x: 1 if len(x) > 0 else 0)
         st.session_state['processed_emo'] = df
 
+    # --- UI RENDER (Tabs) ---
     if 'processed_emo' in st.session_state:
         df = st.session_state['processed_emo']
         
         with tab1:
             st.subheader("⚡ Total Emotional Load")
+            st.caption("Percentage of consumer feedback containing extrapolated emotional triggers.")
             load_data = df.groupby(p_col)['has_emotion'].mean() * 100
             fig, ax = plt.subplots(figsize=(10, 6))
             load_data.sort_values().plot(kind='barh', color='#A2D2FF', ax=ax)
-            ax.set_xlabel("% of Verbatims with Emotional Content")
             st.pyplot(fig)
             st.dataframe(load_data.rename("Emotional Load %").sort_values(ascending=False))
 
         with tab2:
-            # SAFETY FIX APPLIED HERE
             p_options = sorted(df[p_col].unique())
             target = st.selectbox("Select Fragrance to Inspect", p_options)
-            
             sub_df = df[df[p_col] == target]
             all_matches = [item for sublist in sub_df['matches'] for item in sublist]
             
@@ -91,8 +125,7 @@ if data_file and dict_file:
                 c1, c2 = st.columns(2)
                 with c1:
                     st.write("**Main Category Split**")
-                    cat_counts = m_df['cat'].value_counts(normalize=True) * 100
-                    st.bar_chart(cat_counts)
+                    st.bar_chart(m_df['cat'].value_counts(normalize=True) * 100)
                 with c2:
                     st.write("**Sub-Dimension Profile**")
                     color_map = {"Emotion": "#FFADAD", "Image": "#A0C4FF", "Sensation": "#CAFFBF"}
@@ -102,7 +135,7 @@ if data_file and dict_file:
                     ax2.barh(sub_counts['sub'], sub_counts['count'], color=colors)
                     st.pyplot(fig2)
             else:
-                st.warning("No matches for this product.")
+                st.warning("No emotional matches detected for this product.")
 
         with tab3:
             st.subheader("⚔️ Competitive Mapping")
@@ -111,4 +144,4 @@ if data_file and dict_file:
                 comp_df = pd.DataFrame(all_emo_list)
                 pivot_df = pd.crosstab(comp_df['pid'], comp_df['cat'], normalize='index') * 100
                 st.bar_chart(pivot_df)
-                st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Blues"))
+                st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Purples"))
