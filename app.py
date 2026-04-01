@@ -20,7 +20,6 @@ lemmatizer = setup_nltk()
 
 def simple_clean(text):
     if not text or pd.isna(text): return []
-    # Keep standard characters, handles accents for FR/ES/DE
     words = re.findall(r'\b[a-zà-ÿ]{3,}\b', str(text).lower())
     return [lemmatizer.lemmatize(w) for w in words]
 
@@ -30,10 +29,10 @@ with st.sidebar:
     data_file = st.file_uploader("1. Upload Verbatim Excel", type=["xlsx"])
     dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
     st.divider()
-    # New: Sensitivity Slider for Extrapolation
-    # Higher = stricter (needs exact words), Lower = more creative extrapolation
-    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.85, 
-                                  help="Lower values allow more 'fuzzy' matching of ideas.")
+    
+    # Sensitivity Logic: 1.0 = Strict (Baseline), < 1.0 = Extrapolation
+    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 1.0, 
+                                  help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using Column D examples.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
 
 tab1, tab2, tab3 = st.tabs(["📊 Emotional Load", "🌈 Fragrance Profiles", "📈 Competitive View"])
@@ -49,10 +48,10 @@ if data_file and dict_file:
     else:
         dict_df = pd.read_excel(dict_file)
     
-    # --- ENHANCED: Knowledge Base Building ---
-    # We map NOT just the 'mot' (Col C) but also keywords found in 'Examples' (Col D)
-    emo_map = {}
-    knowledge_pool = [] 
+    # --- REFINED: Balanced Knowledge Base ---
+    emo_map = {}        # Strict Map (Col C)
+    context_map = {}    # Context Map (Col D)
+    knowledge_pool = [] # For fuzzy matching
 
     for _, row in dict_df.iterrows():
         cat = str(row.iloc[0]).strip() 
@@ -63,41 +62,46 @@ if data_file and dict_file:
         if cat != "OUT" and primary_word != "nan" and primary_word != "":
             entry = {"cat": cat, "sub": sub}
             
-            # Map the primary trigger
+            # 1. Primary Keyword (Column C)
             emo_map[primary_word] = entry
             knowledge_pool.append(primary_word)
             
-            # EXTRAPOLATION STEP: Extract keywords from Column D examples
-            # This allows the AI to "learn" the context you provided
+            # 2. Extract keywords from Column D for the secondary pool
             example_keywords = re.findall(r'\b[a-zà-ÿ]{4,}\b', examples)
             for kw in example_keywords:
                 if kw not in emo_map:
-                    emo_map[kw] = entry
+                    context_map[kw] = entry
                     knowledge_pool.append(kw)
 
-    knowledge_pool = list(set(knowledge_pool)) # Clean duplicates
+    knowledge_pool = list(set(knowledge_pool))
 
     if st.sidebar.button("🚀 Analyze Emotional Impact"):
         df = df_raw.copy()
         df = df.dropna(subset=[p_col, v_col])
         df[p_col] = df[p_col].astype(str).str.strip()
         
-        # --- ENHANCED: Extrapolated Matching Function ---
-        def get_emotions_extrapolated(text):
+        # --- REFINED: Extrapolated Matching Function ---
+        def get_emotions(text):
             tokens = simple_clean(text)
             matches = []
+            
             for t in tokens:
-                # 1. Check direct match
+                # STEP 1: Strict Check (Column C) - This preserves your baseline results
                 if t in emo_map:
                     matches.append(emo_map[t])
-                # 2. Extrapolate: Check if word is very similar to our knowledge pool
-                else:
+                
+                # STEP 2: Extrapolation Check (Column D + Fuzzy Logic)
+                # Only runs if user sets sensitivity below 1.0
+                elif match_sensitivity < 1.0:
                     fuzzy_match = get_close_matches(t, knowledge_pool, n=1, cutoff=match_sensitivity)
                     if fuzzy_match:
-                        matches.append(emo_map[fuzzy_match[0]])
+                        # Try to find the associated category in either map
+                        res = emo_map.get(fuzzy_match[0]) or context_map.get(fuzzy_match[0])
+                        if res:
+                            matches.append(res)
             return matches
 
-        df['matches'] = df[v_col].apply(get_emotions_extrapolated)
+        df['matches'] = df[v_col].apply(get_emotions)
         df['has_emotion'] = df['matches'].apply(lambda x: 1 if len(x) > 0 else 0)
         st.session_state['processed_emo'] = df
 
@@ -107,7 +111,6 @@ if data_file and dict_file:
         
         with tab1:
             st.subheader("⚡ Total Emotional Load")
-            st.caption("Percentage of consumer feedback containing extrapolated emotional triggers.")
             load_data = df.groupby(p_col)['has_emotion'].mean() * 100
             fig, ax = plt.subplots(figsize=(10, 6))
             load_data.sort_values().plot(kind='barh', color='#A2D2FF', ax=ax)
@@ -135,7 +138,7 @@ if data_file and dict_file:
                     ax2.barh(sub_counts['sub'], sub_counts['count'], color=colors)
                     st.pyplot(fig2)
             else:
-                st.warning("No emotional matches detected for this product.")
+                st.warning("No emotional matches detected.")
 
         with tab3:
             st.subheader("⚔️ Competitive Mapping")
