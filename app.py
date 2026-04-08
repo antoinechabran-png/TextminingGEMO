@@ -31,9 +31,8 @@ with st.sidebar:
     dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
     st.divider()
     
-    # Default value set to 0.92 as requested
     match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.92, 
-                                  help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using the synonyms in Column D.")
+                                  help="At 1.0, only Column C keywords are used. Below 1.0, the AI extrapolates using synonyms.")
     dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
 
 tab1, tab2, tab3 = st.tabs(["📊 Emotional Load", "🌈 Fragrance Profiles", "📈 Competitive View"])
@@ -80,14 +79,43 @@ if data_file and dict_file:
         def get_emotions(text):
             tokens = simple_clean(text)
             matches = []
-            for t in tokens:
+            i = 0
+            # Common negation terms to block false positives
+            negations = ["not", "no", "pas", "non", "sans", "less", "peu", "un peu"]
+            
+            while i < len(tokens):
+                # --- 1. Check 3-Grams (e.g., "not very happy") ---
+                trigram = " ".join(tokens[i:i+3]) if i < len(tokens) - 2 else None
+                if trigram and trigram in emo_map:
+                    matches.append(emo_map[trigram])
+                    i += 3
+                    continue
+
+                # --- 2. Check 2-Grams (e.g., "not happy") ---
+                bigram = " ".join(tokens[i:i+2]) if i < len(tokens) - 1 else None
+                if bigram and bigram in emo_map:
+                    matches.append(emo_map[bigram])
+                    i += 2
+                    continue
+                
+                # --- 3. Negation Safety Net ---
+                # If current word is a negation and not part of a dictionary phrase
+                if tokens[i] in negations:
+                    i += 2 # Skip the negation and the following word
+                    continue
+
+                # --- 4. Standard Unigram (1-word) ---
+                t = tokens[i]
                 if t in emo_map:
                     matches.append(emo_map[t])
                 elif match_sensitivity < 1.0:
                     fuzzy_match = get_close_matches(t, knowledge_pool, n=1, cutoff=match_sensitivity)
                     if fuzzy_match:
+                        # Priority to main map, then context/synonyms
                         res = emo_map.get(fuzzy_match[0]) or context_map.get(fuzzy_match[0])
                         if res: matches.append(res)
+                
+                i += 1
             return matches
 
         df['matches'] = df[v_col].apply(get_emotions)
@@ -145,9 +173,8 @@ if data_file and dict_file:
             if all_emo_list:
                 comp_df = pd.DataFrame(all_emo_list)
                 pivot_df = pd.crosstab(comp_df['pid'], comp_df['cat'], normalize='index') * 100
-                
-                # Reverted back to clean Streamlit bar chart
                 st.bar_chart(pivot_df)
+                st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Purples"))
                 
                 # Precise scores in the table below
                 st.table(pivot_df.style.format("{:.1f}%").background_gradient(cmap="Purples"))
