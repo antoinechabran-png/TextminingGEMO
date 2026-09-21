@@ -360,15 +360,15 @@ class DictionaryMatcher:
 # --- UI Setup ---
 with st.sidebar:
     st.header("⚙️ Analysis Settings")
-    data_file = st.file_uploader("1. Upload Verbatim Excel", type=["xlsx"])
-    dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"])
+    data_file = st.file_uploader("1. Upload Verbatim Excel", type=["xlsx"], key="gemo_verbatim_upload")
+    dict_file = st.file_uploader("2. Upload Emotional Dictionary", type=["xlsx", "csv"], key="gemo_emotion_dictionary_upload")
     
     st.divider()
-    enable_crush = st.checkbox("❤️ Enable Crush Index")
+    enable_crush = st.checkbox("❤️ Enable Crush Index", key="gemo_enable_crush")
     crush_dict_file = None
     crush_sheet = None
     if enable_crush:
-        crush_dict_file = st.file_uploader("Upload Crush Dictionary", type=["xlsx"])
+        crush_dict_file = st.file_uploader("Upload Crush Dictionary", type=["xlsx"], key="gemo_crush_dictionary_upload")
         if crush_dict_file:
             # Robust sheet detection to avoid ValueError
             try:
@@ -376,20 +376,20 @@ with st.sidebar:
                 available_sheets = xl.sheet_names
                 default_sheets = ["English", "French", "English For Translation"]
                 # Filter defaults to what's actually in the file, or show all
-                crush_sheet = st.selectbox("Select Crush Language Sheet", available_sheets)
+                crush_sheet = st.selectbox("Select Crush Language Sheet", available_sheets, key="gemo_crush_sheet")
             except Exception as e:
                 st.error(f"Error reading Crush file: {e}")
 
     st.divider()
-    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.92)
-    dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"])
+    match_sensitivity = st.slider("Extrapolation Sensitivity", 0.6, 1.0, 0.92, key="gemo_sensitivity")
+    dataset_lang = st.selectbox("Dataset Language:", ["English", "French", "German", "Spanish"], key="gemo_language")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Emotional Load", "🌈 Fragrance Profiles", "📈 Competitive View", "❤️ Crush Index"])
 
 if data_file and dict_file:
     df_raw = pd.read_excel(data_file)
-    p_col = st.selectbox("Product ID Column", df_raw.columns)
-    v_col = st.selectbox("Verbatim Column", df_raw.columns)
+    p_col = st.selectbox("Product ID Column", df_raw.columns, key="gemo_product_column")
+    v_col = st.selectbox("Verbatim Column", df_raw.columns, key="gemo_verbatim_column")
 
     # Load Main Dictionary
     dict_df = pd.read_csv(dict_file) if dict_file.name.endswith('.csv') else pd.read_excel(dict_file)
@@ -430,7 +430,7 @@ if data_file and dict_file:
     if st.session_state.get('analysis_signature') != analysis_signature:
         st.session_state.pop('processed_emo', None)
 
-    if st.sidebar.button("🚀 Analyze Emotional Impact"):
+    if st.sidebar.button("🚀 Analyze Emotional Impact", key="gemo_analyze"):
         df = df_raw.copy().dropna(subset=[p_col, v_col])
         df[p_col] = df[p_col].astype(str).str.strip()
         
@@ -461,7 +461,7 @@ if data_file and dict_file:
             st.pyplot(fig)
 
         with tab2:
-            target = st.selectbox("Select Fragrance to Inspect", sorted(df[p_col].unique()))
+            target = st.selectbox("Select Fragrance to Inspect", sorted(df[p_col].unique()), key="gemo_profile_product")
             sub_df = df[df[p_col] == target]
             st.caption(f"{len(sub_df)} analyzed verbatim(s). Category percentages use detected mentions, not respondents.")
             with st.expander("Review emotional matches and excluded negations"):
