@@ -5,6 +5,7 @@ from nltk.stem import WordNetLemmatizer
 import matplotlib.pyplot as plt
 import re
 import numpy as np
+import hashlib
 from difflib import get_close_matches
 
 # Page Config
@@ -86,6 +87,15 @@ if data_file and dict_file:
         except Exception as e:
             st.sidebar.error(f"Could not load Crush sheet: {e}")
 
+    analysis_signature = (
+        hashlib.sha256(data_file.getvalue()).hexdigest(),
+        hashlib.sha256(dict_file.getvalue()).hexdigest(),
+        p_col, v_col, enable_crush, crush_sheet, match_sensitivity, dataset_lang,
+        hashlib.sha256(crush_dict_file.getvalue()).hexdigest() if crush_dict_file else None,
+    )
+    if st.session_state.get('analysis_signature') != analysis_signature:
+        st.session_state.pop('processed_emo', None)
+
     if st.sidebar.button("🚀 Analyze Emotional Impact"):
         df = df_raw.copy().dropna(subset=[p_col, v_col])
         df[p_col] = df[p_col].astype(str).str.strip()
@@ -114,17 +124,19 @@ if data_file and dict_file:
                 i += 1
             return matches
 
-        def check_crush(text):
-            if not crush_keywords: return 0
+        def get_crush_matches(text):
             text_lower = str(text).lower()
-            return 1 if any(word in text_lower for word in crush_keywords) else 0
+            # Retain the original substring matching, excluding empty keywords.
+            return list(dict.fromkeys(word for word in crush_keywords if word and word in text_lower))
 
         df['matches'] = df[v_col].apply(get_emotions)
         df['has_emotion'] = df['matches'].apply(lambda x: 1 if len(x) > 0 else 0)
         if enable_crush:
-            df['is_crush'] = df[v_col].apply(check_crush)
+            df['crush_matches'] = df[v_col].apply(get_crush_matches)
+            df['is_crush'] = df['crush_matches'].apply(lambda matches: int(bool(matches)))
             
         st.session_state['processed_emo'] = df
+        st.session_state['analysis_signature'] = analysis_signature
 
     if 'processed_emo' in st.session_state:
         df = st.session_state['processed_emo']
@@ -183,7 +195,42 @@ if data_file and dict_file:
                     ax_crush.bar_label(bars_crush, fmt='%.1f%%', padding=5)
                     ax_crush.set_xlabel("% of Verbatims expressing a 'Crush'")
                     st.pyplot(fig_crush)
-                    st.dataframe(crush_data.rename("Crush Index %").sort_values(ascending=False))
+                    plt.close(fig_crush)
+                    summary_tab, verbatim_tab = st.tabs(["Index by product", "Crush verbatim extracts"])
+                    with summary_tab:
+                        st.dataframe(crush_data.rename("Crush Index %").sort_values(ascending=False))
+                    with verbatim_tab:
+                        selected_product = st.selectbox(
+                            "Select fragrance / product code",
+                            sorted(df[p_col].unique()),
+                            key="crush_product_selector",
+                        )
+                        product_rows = df[df[p_col] == selected_product]
+                        crush_rows = product_rows[product_rows['is_crush'] == 1]
+                        st.caption(
+                            f"{len(crush_rows)} crush verbatim(s) out of {len(product_rows)} "
+                            f"analyzed verbatim(s) — Crush Index: "
+                            f"{100 * len(crush_rows) / len(product_rows):.1f}%"
+                        )
+                        st.caption("Full original responses, with the dictionary terms that triggered each crush flag.")
+                        if crush_rows.empty:
+                            st.info("No crush verbatims were detected for this product.")
+                        else:
+                            extracts = pd.DataFrame({
+                                "Product code": crush_rows[p_col].to_numpy(),
+                                "Verbatim": crush_rows[v_col].to_numpy(),
+                                "Matched crush terms": crush_rows['crush_matches'].apply(
+                                    lambda terms: "; ".join(terms)
+                                ).to_numpy(),
+                            })
+                            st.dataframe(extracts, hide_index=True, use_container_width=True)
+                            st.download_button(
+                                "Download selected product's crush verbatims (CSV)",
+                                data=extracts.to_csv(index=False).encode("utf-8-sig"),
+                                file_name="crush_verbatims.csv",
+                                mime="text/csv",
+                                key="download_crush_verbatims",
+                            )
                 else:
                     st.warning("No data available for Crush Index. Check your dictionary and verbatims.")
             else:
